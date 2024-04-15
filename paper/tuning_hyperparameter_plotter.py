@@ -35,7 +35,7 @@ class OOMFormatter(matplotlib.ticker.ScalarFormatter):
         if self._useMathText:
             self.format = r'$\mathdefault{%s}$' % self.format
 
-df = pd.read_excel('./TRIAL_II_EPOCH_1000_GAMMA_0.5_EPSILON_[0.1-0.9]_QL_tuning.xlsx')
+df = pd.read_excel('./TRIAL_II_EPOCH_1000_GAMMA_0.5_EPSILON_[0.1-1]_QL_tuning.xlsx')
 
 fig = plt.figure(figsize=(10, 8))
 ax = fig.add_subplot(111, projection='3d')
@@ -80,11 +80,22 @@ ax.zaxis.set_tick_params(labelsize=8)
 # Show the plot
 
 max_index = np.unravel_index(np.nanargmax(Z, axis=None), Z.shape)
+min_index = np.unravel_index(np.nanargmin(Z, axis=None), Z.shape)
+avg_Z = np.nanmean(Z)
+avg_index = np.unravel_index(np.nanargmin(np.abs(Z - avg_Z)), Z.shape)
 
 # Extract corresponding X, Y, and Z values
 max_X = X[max_index]
 max_Y = Y[max_index]
 max_Z = Z[max_index]
 
-print(f"\n\nMaximum value of Energy Residual : {max_Z} | alpha : {max_X} | epsilon : {max_Y}")
+min_X = X[min_index]
+min_Y = Y[min_index]
+min_Z = Z[min_index]
+
+avg_X = X[avg_index]
+avg_Y = Y[avg_index]
+avg_Z = Z[avg_index]
+
+print(f"\n\nMaximum value of Energy Residual : {max_Z} | alpha : {max_X} | epsilon : {max_Y} \nMinimum value of Energy Residual : {min_Z} | alpha : {min_X} | epsilon : {min_Y} \nAverage value of Energy Residual : {avg_Z} | alpha : {avg_X} | epsilon : {avg_Y} \n\n")
 plt.show()
