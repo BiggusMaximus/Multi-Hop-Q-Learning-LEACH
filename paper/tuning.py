@@ -20,6 +20,10 @@ np.seterr(divide='ignore', invalid='ignore')
 import warnings
 warnings.simplefilter("error")
 import os
+import argparse
+parser = argparse.ArgumentParser()
+parser.add_argument('--filename', help='Input file name', type=str)
+args = parser.parse_args()
 
 # %%
 D = 1e3
@@ -54,7 +58,7 @@ kt = kd + N
 beta = 0.8
 data_rate = 500 # bps
 t_transmission =  ((kd * 8)/data_rate) + ((kc * 8)/data_rate) + (((kc + N) * 8)/data_rate)
-initial_energy = 500
+initial_energy = 1000
 P_tx = 2
 P_rx = 0.5
 P_idle = 2 * 1e-3
@@ -63,9 +67,14 @@ T_c = ((kc * 8)/data_rate)
 T_d = ((kd * 8)/data_rate)
 T_t = (((kc + N) * 8)/data_rate)
 
-DECKS_threshold = 3
+DECKS_threshold = 250
 p = 0.1
-
+QL_params = {
+    'EPOCH'   : 1000,
+    'EPSILON' : 0.9,
+    'GAMMA'   : 0.5,
+    'ALPHA'   : 0.614
+}
 # EBR-RL
 p_EBR_RL = 0.3
 
@@ -559,10 +568,8 @@ class multiHop(object):
             # print("potential_next_states = 0")
             return aim_state
 
-
-# %%
 class networkEnvironment:
-    def __init__(self, nodes, mode, showInfo, showPlotIteration, QL_params):
+    def __init__(self, nodes, mode, showInfo, showPlotIteration, QL_params=QL_params):
         self.QL_params = QL_params
         self.nodes = nodes 
         self.mode = mode
@@ -693,7 +700,7 @@ class networkEnvironment:
                 'weight': 'bold'
                 }
 
-        if ((self.mode == "QELAR") or (self.mode == "EBR-RL") or (self.mode == "Q-Learning")):
+        if not ((self.mode == "DECKS") or (self.mode == "LEACH") or (self.mode == "K-Means") or (self.mode == "Modified K-Means")):
             for index_path in range(len(self.multihop_path)-1):
                 print(f"{index_path} | Path : {len(self.multihop_path)} | Node : {len(self.nodes)}")
                 start_x = self.nodes[self.multihop_path[index_path]].x
@@ -726,7 +733,7 @@ class networkEnvironment:
         plt.show()
 
     def multiHopRouting(self, node):
-        if self.mode == "Q-Learning":
+        if ((self.mode == "Q-Learning") or (self.mode == "Pure Q-Learning")):
             if ((node.alive) and (node.energy>0)):
                 G = nx.Graph()
                 data = [[], [], [], []]
@@ -772,7 +779,7 @@ class networkEnvironment:
                 paths = [node.id]
             return paths
         
-        elif self.mode == "EBR-RL":
+        elif ((self.mode == "EBR-RL") or (self.mode == "Pure EBR-RL")):
             if ((node.alive) and (node.energy>0)):
                 G = nx.Graph()
                 data = [[], [], [], [], []]
@@ -825,7 +832,7 @@ class networkEnvironment:
             paths, td = Q_learning.q_learning(start_state=node.id, aim_state = 0, num_epoch=self.QL_params['EPOCH'], gamma=self.QL_params['GAMMA'], epsilon=self.QL_params['EPSILON'], alpha=self.QL_params['ALPHA'])
             return paths
             
-        elif self.mode == "QELAR":
+        elif ((self.mode == "QELAR") or (self.mode == "Pure QELAR")):
             R_smsn = 0
             R_snsn = 0
 
@@ -917,7 +924,7 @@ class networkEnvironment:
                 G.add_edge(data[0][i], data[1][i], weight=round(data[2][i], 3))
                             
             Q_learning = multiHop(G)
-            paths, td = Q_learning.q_learning(start_state=node.id, aim_state = 0, num_epoch=self.QL_params['EPOCH'], gamma=self.QL_params['GAMMA'], epsilon=self.QL_params['EPSILON'], alpha=self.QL_params['ALPHA'])
+            paths, td = Q_learning.q_learning(start_state=node.id, aim_state = 0, num_epoch=self.QL_params['EPOCH'], gamma=self.QL_params['GAMMA'], epsilon=self.QL_params['EPSILON'], alpha=self.QL_params['ALPHA'], q_value=0)
             return paths         
                             
     
@@ -933,7 +940,6 @@ class networkEnvironment:
     
     def LEACH(self, round_number):
         for node in self.nodes:
-            d_CH_BS = self.euclidean_distance(np.array([node.x, node.y, node.z]), np.array(BS))
             status = (
                 (node.energy > 0) and 
                 (node.alive == True) and 
@@ -1055,29 +1061,96 @@ class networkEnvironment:
             self.optimal_k = np.argmax(acceleration)
             self.centroids, labels = self.kmeans(X, self.optimal_k)
 
-            ch_id = []
-            for ch in self.centroids:
-                distances = [[], [], []]
-                for node in self.nodes:
-                    if ((node.id != 0) and (node.energy > 0) and (node.alive)):
-                        X = np.array([node.x, node.y, node.z])
-                        CH = np.array([ch[0], ch[1], ch[2]])
-                        distances[0].append(self.euclidean_distance(X, CH))
-                        distances[1].append(node.id)
-                        distances[2].append(1/node.energy)
-                        
-                data = np.array([distances[0], distances[2]])
+            labels = np.array(labels)
+            number_of_clusters = np.unique(labels)
+
+            for cluster in number_of_clusters:
+                count = 0
+                within_cluster = []
+                for label in labels:
+                    if label == cluster:
+                        within_cluster.append(self.nodes[count])
+                    count += 1
+
+                for node_i in within_cluster:
+                    weight = [[], [], []]
+                    d_ij = 0
+                    X = np.array([node_i.x, node_i.y, node_i.z])
+                    for node_j in within_cluster:
+                        if ((node_i != node_j) and (node_i.energy > 0) and (node_j.energy > 0) and (self.euclidean_distance(X, BS) < d_max)):
+                            d_ij += self.euclidean_distance(np.array([node_i.x, node_i.y, node_i.z]), np.array([node_j.x, node_j.y, node_j.z])) + self.euclidean_distance(X, BS)
+
+                    weight[0].append(node_i.id)
+                    weight[1].append(d_ij)
+                    weight[2].append(1/node_i.energy)
+                    
+                
+
+                data = np.array([weight[1], weight[2]])
                 scaler = StandardScaler()
                 standardized_data = scaler.fit_transform(data)
-                ch_id.append(distances[1][np.argmin(standardized_data[0] + standardized_data[1])])
+                ch_id = weight[0][np.argmin(standardized_data[0] + standardized_data[1])]
+                
+                for node in self.nodes:
+                  if node.id == ch_id:
+                      node.CH = True
+                      node.which_cluster = node.id
 
+    def proposedMethod_CHSelection2(self):                    
+        X, id = [], []
+        for node in self.nodes:
+            if ((node.id != 0) and (node.alive) and (node.energy > 0)) :
+                X.append([node.x, node.y, node.z])
+                id.append(node.id)
 
-            for node in self.nodes:
-                if node.id != 0:
-                    for id in ch_id:
-                        if node.id == id:
-                            node.CH = True
-                            node.which_cluster = id
+        X = np.array(X)
+        if len (X) != 0 :
+            max_k = 15  # Maximum number of clusters to try
+            temp = 0
+
+            for k in range(1, max_k + 1):
+                centroids, labels = self.kmeans(X, k)   
+                labels = np.array(labels)
+                number_of_clusters = np.unique(labels)
+                error = np.sum((X - centroids[labels])**2 + (X - BS)**2)
+                if temp < error:
+                    temp = error
+                else:
+                    self.optimal_k = k
+
+            self.centroids, labels = self.kmeans(X, self.optimal_k)
+            labels = np.array(labels)
+            number_of_clusters = np.unique(labels)
+
+            for cluster in number_of_clusters:
+                count = 0
+                within_cluster = []
+                for label in labels:
+                    if label == cluster:
+                        within_cluster.append(self.nodes[count])
+                    count += 1
+
+                for node_i in within_cluster:
+                    weight = [[], [], []]
+                    d_ij = 0
+                    X = np.array([node_i.x, node_i.y, node_i.z])
+                    for node_j in within_cluster:
+                        if ((node_i != node_j) and (node_i.energy > 0) and (node_j.energy > 0) and (self.euclidean_distance(X, BS) < d_max)):
+                            d_ij += self.euclidean_distance(np.array([node_i.x, node_i.y, node_i.z]), np.array([node_j.x, node_j.y, node_j.z])) + self.euclidean_distance(X, BS)
+
+                    weight[0].append(node_i.id)
+                    weight[1].append(d_ij)
+                    weight[2].append(1/node_i.energy)
+
+                data = np.array([weight[1], weight[2]])
+                scaler = StandardScaler()
+                standardized_data = scaler.fit_transform(data)
+                ch_id = weight[0][np.argmin(standardized_data[0] + standardized_data[1])]
+                
+                for node in self.nodes:
+                  if node.id == ch_id:
+                      node.CH = True
+                      node.which_cluster = node.id
 
     def DECKS_LEACH(self, DECKS_threshold):                    
         X, id = [], []
@@ -1137,6 +1210,8 @@ class networkEnvironment:
             self.LEACH(round_number)
         elif ((self.mode == "EBR-RL") or (self.mode == "QELAR") or (self.mode == "Q-Learning")):
             self.proposedMethod_CHSelection()
+        elif self.mode == "Modified K-Means":
+            self.proposedMethod_CHSelection2()
         elif self.mode == "K-Means":
             self.kmeans_LEACH()
         elif self.mode == "DECKS":
@@ -1175,8 +1250,8 @@ class networkEnvironment:
                     node.which_cluster = 0
             count += 1
             
-        #$if round_number % self.showPlotIteration == 0:
-            #self.showNetwork(round_number)
+        if ((round_number % self.showPlotIteration == 0) and (self.showInfo)):
+            self.showNetwork(round_number)
             
     def SetupPhase(self, simulation_round):
         # CH Selection and Advertisement Energy Dissipation and Creating TDMA Schedule
@@ -1266,7 +1341,7 @@ class networkEnvironment:
 
             if ((node.energy > 0) and (node.alive == True) and (node.id != 0) and (node.which_cluster == 0) and (node.has_data == 1)):
                 total_data += kd
-                if  not ((self.mode == "Q-Learning") or (self.mode == "QELAR") or (self.mode == "EBR-RL")):
+                if  ((self.mode == "DECKS") or (self.mode == "LEACH") or (self.mode == "K-Means") or (self.mode == "Modified K-Means")):
                     node_failure += 1
                     node.energy -= node.energyIdle()
                     energy += node.energyIdle()
@@ -1283,12 +1358,13 @@ class networkEnvironment:
                                 energy += node.energyHop(d_CH_Node)
                         success_delivered += kd
                     else:
+                        node_failure += 1
                         node.energy -= node.energyIdle()
                         energy += node.energyIdle()
                     
-                    # if ((len(self.multihop_path) > 2) and (simulation_round % self.showPlotIteration == 0)):
-                    #     self.show_path = self.multihop_path
-                    #     self.showNetwork(simulation_round)
+                    if ((len(self.multihop_path) > 2) and (simulation_round % self.showPlotIteration == 0) and (self.showInfo)):
+                        self.show_path = self.multihop_path
+                        self.showNetwork(simulation_round)
             # else:
             #     stat = ((node.energy > 0) and (node.alive == True) and(node.id != 0) and (node.which_cluster == 0) and (node.has_data == 1))
             #     # print(
@@ -1319,14 +1395,92 @@ class networkEnvironment:
         self.alive_data.append(node_alive)
         self.energy_data.append(energy_total)
 
+    def flatBasedProtocol(self, simulation_round):
+        for node in self.nodes:
+            node.reset()
+        node_alive = [node for node in self.nodes if  ((node.energy > 0) and (node.alive == True) and (node.id != 0) and (node.CH != True) and (node.has_data == 1))]
+        has_data = bernoulli.rvs(bernoulli_probability, size=len(node_alive))
+        
+        energy_total = 0
+        node_alive = 0
+        node_failure = 0
+        energy = 0
+        total_data = 0
+        success_delivered = 0
+
+
+        count = 0
+        for node in self.nodes:
+            status = ((node.energy > 0) and (node.alive == True) and (node.id != 0) and (node.CH != True))
+            if status:
+                if has_data[count] == 0:
+                    node.has_data = False
+                    node.energy -= node.energyIdle()
+                count += 1
+
+        for node in self.nodes:
+            if ((node.energy > 0) and (node.alive == True) and(node.id != 0) and (node.has_data == 1)):
+                total_data += kd
+                self.multihop_path = self.multiHopRouting(node)
+                print(f"Round : {simulation_round} | PATH : {self.multihop_path} | node.energy : {node.energy}")
+                if len(self.multihop_path) > 1:
+                    for i in range(0, len(self.multihop_path)-1):
+                        if node.energy > 0:
+                            nodeA, nodeB = self.nodes[self.multihop_path[i]], self.nodes[self.multihop_path[i+1]]
+                            d_ij = self.euclidean_distance(np.array([nodeA.x, nodeA.y]), np.array([nodeB.x, nodeB.y]))
+                            # print(f"    path data from {nodeA.id} to {nodeB.id} d : {d_CH_Node:.2f}")
+                            node.energy = node.energy - node.energyHop(d_ij)
+                            energy += node.energyHop(d_ij)
+                    success_delivered += kd
+                else:
+                    node_failure += 1
+                    node.energy -= node.energyIdle()
+                    energy += node.energyIdle()
+
+                if ((len(self.multihop_path) > 2) and (simulation_round % self.showPlotIteration == 0) and (self.showInfo)):
+                        self.show_path = self.multihop_path
+                        self.showNetwork(simulation_round)
+
+            if node.energy < 0:
+                node.alive = False
+            
+            if node.alive:
+                node_alive += 1
+                energy_total += node.energy
+        
+        if total_data > 0:
+            print("a")
+            pdr = success_delivered/total_data
+        else:
+            print("b")
+            pdr = 0
+        
+        self.data_sent += success_delivered
+
+        self.total_packet_sent.append(self.data_sent)
+        self.PDR.append(pdr)
+        self.steadyPhaseEnergy.append(energy)
+        self.node_failure.append(node_failure)
+        self.alive_data.append(node_alive)
+        self.energy_data.append(energy_total)
+
+
     def startSimulation(self, rounds):
-        #self.showNetwork(0)
-        print(f"Mode : {self.mode}")
-        for simulation_round in range(0, rounds+1):
-            self.SetupPhase(simulation_round)
-            # print(f"Round : {simulation_round}")
-            self.SteadyStatePhase(simulation_round)
-        # self.showResult(5)
+        if self.showInfo:
+            print(f"Mode : {self.mode}")
+        
+        if not ((self.mode == "Pure QELAR") or (self.mode == "Pure EBR-RL") or (self.mode == "Pure Q-Learning")):
+            for simulation_round in range(0, rounds+1):
+                self.SetupPhase(simulation_round)
+                # print(f"Round : {simulation_round}")
+                self.SteadyStatePhase(simulation_round)
+        else:
+            for simulation_round in range(0, rounds+1):
+                self.flatBasedProtocol(simulation_round)
+
+        
+        if self.showInfo:
+            self.showResult(5)
 
         params = {
             'Alive' : self.alive_data,
@@ -1338,12 +1492,14 @@ class networkEnvironment:
             'Energy Steady Consumed' : self.steadyPhaseEnergy,
         }
         return params
+                    
        
 epoch = 1000
 gamma = 0.5
 epsilon_start = 0.0
-epsilon_end = 0.9
-file_path = f'TRIAL_III-6_EPOCH_{epoch}_GAMMA_{gamma}_EPSILON_[{epsilon_start}-{epsilon_end}]_QL_tuning.xlsx'
+epsilon_end = 1
+file_path = str(args.filename) + ".xlsx"
+print(file_path)
 count = 0
 
 
@@ -1392,6 +1548,7 @@ if os.path.exists(file_path):
             print(df_tuning_result.tail(5))
             df_tuning_result.to_excel(file_path, index=False)
             count += 1
+    play_sound(10)
 else:
     df_tuning_result = {
         'EPOCH'   : [],
@@ -1409,8 +1566,52 @@ else:
     }
     df_tuning_result = pd.DataFrame(df_tuning_result)
     df_tuning_result.to_excel(file_path, index=False)
+    df_tuning_result = pd.read_excel(file_path)
+    for epsilon in [i for i in range(int(epsilon_start * 10), int(epsilon_end * 10)+1)]:
+        epsilon = epsilon * 0.1
+        for alpha in range(1, 11):
+            start_time = time.time()
+            alpha = alpha * 0.1
+            QL_params = {
+                'EPOCH'   : epoch,
+                'EPSILON' : epsilon,
+                'GAMMA'   : gamma,
+                'ALPHA'   : alpha
+            }
+            start_time         = time.time()
+            node_Q_Learning    = createNetworks()
+            Q_Learning = networkEnvironment(node_Q_Learning, "Q-Learning", False, 201, QL_params)
+            Q_Learning_params = Q_Learning.startSimulation(200)
+          
 
+            end_time = time.time()  
+            time_taken = end_time - start_time
+            print(f"{time_taken:.2f} | {count} | epsilon : {epsilon} | alpha : {alpha} | gamma : {gamma}")
+            end_time = time.time()
+
+            result = {
+                'EPOCH'   : [epoch  ],
+                'EPSILON' : [epsilon],
+                'GAMMA'   : [gamma  ],
+                'ALPHA'   : [alpha  ],
+                "TIME"      : [time_taken]      
+            }
+            for param in Q_Learning_params.keys():
+                temp = Q_Learning_params[param]
+                temp = sum(temp)/len(temp)
+                result[param] = [temp]
+                
+            result = pd.DataFrame(result)
+            df_tuning_result = pd.read_excel(file_path)
+            df_tuning_result = pd.concat(
+                [df_tuning_result, result], 
+                ignore_index=True
+            )
+            print(df_tuning_result.tail(5))
+            df_tuning_result.to_excel(file_path, index=False)
+            count += 1
+    play_sound(10)
 count += 1
 
 # %%
-play_sound(8)
+
